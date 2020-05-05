@@ -1,0 +1,405 @@
+---
+title: "Final Project"
+author: "Hongyang Yang"
+date: "4/28/2020"
+always_allow_html: yes
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+## Analysis of Relation between NYTimes Coronavirus Article & Public Opinion Polls
+
+GitHub: https://github.com/timothyyang96/Data-Wrangling
+
+
+
+#### Introduction
+
+While the broadsheet decline with the popularity of social media such as Facebook and Twitter, and even influencers on Instagram or Youtube have millions of followers, whether the mainstream media could impact on the public remains a question. Therefore, the project is to make a study on the New York Times articles of Coronavirus and the public opinion polls to have a rough idea of if there is any relation between a broadsheet and its influence on the general public.
+
+Sentiment analysis is extracting the perception, which indicates a positive, negative, or neutral sentiment, of people towards a particular issue, brand, scheme, etc., from textual data. It has a wide range of applications, from brand monitoring, product review analysis to policymaking.
+
+For this project, the method of sentiment analysis and a simple count of newspaper coverage on the relevant topic will be implemented on the articles after using several sets of query words to retrieve search results.
+
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(jsonlite)
+library(tidyverse)
+library(rstan)
+library(dplyr)
+library(tidytext)
+library(textdata)
+library(plotly)
+library(lubridate)
+library(xml2)
+```
+
+```{r include=FALSE, warning=FALSE}
+api.keys.Yang.NYT = "0sOlXxZ5NPwPFmM4ooDWu3Gu7Pdvhcub"
+```
+
+#### Dataset
+
+The datasets contain two parts: one is NYT search result whose schema is cleaned into four columns: `created_time`, `headline`, `web_url`, and `content`; the other is poll data collected from FiveThirtyEight, a website focusing on opinion poll analysis whose GitHub repositories have such data aggregation, and hence there are raw data for direct use.
+
+For NYT articles, the keywords are limited to four prefixes of `coronavirus`, `Covid-19`, `pandemic`, and `epidemic`, and three suffixes of `Trump`, `infection`, and `economy`. The latter three are the most popular topics of the epidemic for U.S.A people and even worldwide. Thus, there are 12 kinds of combinations. On account of NYT developer API limiting each request no more than 2000 times, the date range should be set in three months from February to May, the search type in an article one, and the result order in a relevance sorting.
+
+```{r, warning=FALSE}
+#################################################################################
+####            function - search news article with API                      ####
+nytime = function (keyword) {
+  searchQ = URLencode(keyword)
+  url = paste('http://api.nytimes.com/svc/search/v2/articlesearch.json?q=',searchQ,
+              '&begin_date=20200201&end_date=20200430&sort=relevance&fq=document_type:"article"&api-key=',api.keys.Yang.NYT,sep="")
+  #get the total number of search results
+  initialsearch = fromJSON(url,flatten = T)
+  maxPages = round((initialsearch$response$meta$hits / 10) - 1)
+  
+  #try with the max page limit at 200
+  maxPages = ifelse(maxPages >= 199, 199, maxPages)
+  
+  #creat a empty data frame
+  df = data.frame(created_time=character(), headline=character(),web_url = character())
+  
+  #save search results into data frame
+  for(i in 0:maxPages){
+    #get the search results of each page
+    tryCatch({
+      nytSearch = fromJSON(paste0(url, "&page=", i), flatten = T) 
+      temp = data.frame(created_time = nytSearch$response$docs$pub_date,
+                        headline = nytSearch$response$docs$headline.main,
+                        web_url = nytSearch$response$docs$web_url)
+      df=rbind(df,temp)
+      Sys.sleep(6) #sleep for 6 second
+    }, error = function(e) return(NA_character_))
+    
+  }  
+  return(df)
+}
+
+```
+
+```{r warning=FALSE}
+
+# retrieve full body
+body_text <- function(url_list) {
+  content_list = rep(NA, NROW(url_list))
+  for(i in 1:NROW(url_list)){
+    content_list[i] = tryCatch({
+    xml2::read_html(url_list[i]) %>% rvest::html_nodes(".StoryBodyCompanionColumn p") %>%
+  rvest::html_text() %>% paste(collapse = "\n")
+    }, error = function(e) return(NA_character_))
+  }
+
+  return(content_list)
+}
+
+```
+
+The next step is to clean and wrangle the search result, including removing rows with duplicates and missing values, converting the columns of `created_time` and `content` into the formats of **Date** and **Character**. The table below is the NYTimes search result of Trump and there are 2606 pieces in total. The Infection one has 2937 results while the Economy one has 2867 results.
+
+
+```{r Store the result of relation of epidemic and Trump administration, echo=FALSE, warning=FALSE, message=FALSE}
+# cv_Trump = nytime("coronavirus Trump")
+# c19_Trump = nytime("Covid-19 Trump")
+# pd_Trump = nytime("pandemic Trump")
+# ep_Trump = nytime("epidemic Trump")
+# 
+# NYT_Trump = rbind(cv_Trump, cv_Trump, pd_Trump, ep_Trump)
+# rm(cv_Trump, c19_Trump, pd_Trump, ep_Trump)
+# drops = c("X")
+# NYT_Trump = NYT_Trump[, !(names(NYT_Trump) %in% drops)]
+# NYT_Trump = NYT_Trump[!duplicated(NYT_Trump),] %>% na.omit() %>% as.tibble()
+# NYT_Trump$created_time = as.Date(NYT_Trump$created_time, "%Y-%m-%d")
+# NYT_Trump$web_url = str_replace(NYT_Trump$web_url, "html+", "html")
+# NYT_Trump %>% head()
+# NYT_Trump %>% mutate(content = as.character(body_text(web_url))) %>%
+#   select(created_time, headline, web_url, content) %>% write.csv("data/NYT news_Gov.csv")
+# write.csv(NYT_Trump, "../Data/NYT news_Gov.csv")
+NYT_Trump = read_csv("../Data/NYT news_Gov.csv") %>% as.tibble()
+drops = c("X1")
+NYT_Trump = NYT_Trump[, !(names(NYT_Trump) %in% drops)]
+NYT_Trump %>% head()
+
+```
+
+```{r Retrieve infection data, echo=FALSE, warning=FALSE, message=FALSE}
+# cv_infection = nytime("coronavirus infection")
+# c19_infection = nytime("Covid-19 infection")
+# pd_infection = nytime("pandemic infection")
+# ep_infection = nytime("epidemic infection")
+# 
+# NYT_infection = rbind(cv_infection, c19_infection, pd_infection, ep_infection)
+# rm(cv_infection, c19_infection, pd_infection, ep_infection)
+# drops = c("X")
+# NYT_infection = NYT_infection[, !(names(NYT_infection) %in% drops)]
+# NYT_infection = NYT_infection[!duplicated(NYT_infection),] %>% na.omit() %>% as.tibble()
+# NYT_infection$created_time = as.Date(NYT_infection$created_time, "%Y-%m-%d")
+# NYT_infection$web_url = str_replace(NYT_infection$web_url, "html+", "html")
+# NYT_infection %>% na.omit() %>% head()
+# write.csv(NYT_infection, "../Data/NYT news_Infection.csv")
+NYT_infection = read_csv("../Data/NYT news_Infection.csv") %>% as.tibble()
+drops = c("X1")
+NYT_infection = NYT_infection[, !(names(NYT_infection) %in% drops)]
+NYT_infection %>% head()
+
+```
+
+
+```{r Retrieve economy data, echo=FALSE, warning=FALSE, message=FALSE}
+# cv_economy = nytime("coronavirus economy")
+# c19_economy = nytime("Covid-19 economy")
+# pd_economy = nytime("pandemic economy")
+# ep_economy = nytime("epidemic economy")
+# 
+# NYT_economy = rbind(cv_economy, c19_economy, pd_economy, ep_economy)
+# rm(cv_economy, c19_economy, pd_economy, ep_economy)
+# drops = c("X")
+# NYT_economy = NYT_economy[, !(names(NYT_economy) %in% drops)]
+# NYT_economy = NYT_economy[!duplicated(NYT_economy),] %>% na.omit() %>% as.tibble()
+# NYT_economy$created_time = as.Date(NYT_economy$created_time, "%Y-%m-%d")
+# NYT_economy$web_url = str_replace(NYT_economy$web_url, "html+", "html")
+# NYT_economy %>% na.omit() %>% head()
+# write.csv(NYT_economy, "../Data/NYT news_Economy.csv")
+NYT_economy = read_csv("../Data/NYT news_Economy.csv") %>% as.tibble()
+drops = c("X1")
+NYT_economy = NYT_economy[, !(names(NYT_economy) %in% drops)]
+NYT_economy %>% head()
+
+```
+
+Meanwhile, for the opinion poll data, FiveThirtyEight collects the whole package of pollsters and sample information and calculates the approval and disapproval rates for the subject of Trump, Infection, and Economy. The raw data is presented as follows. The columns such as `startdate`, `enddate`, `approve_adjusted`, and `disapprove_adjusted` would be selected for further processing. The final table should look like a key-value pair, {`average_date`: [`approve_adjusted`, `disapprove_adjusted`]}. Moreover, for the concern-over-economy-or-infection poll data, there are also columns of `startdate` and `enddate`, while four degrees from `very`, `somewhat`, `not_very`, to `not_at_all` should also be included in the processed table.
+
+
+```{r Trump polls, echo=FALSE, warning=FALSE, message=FALSE}
+
+Trump_polls = read_csv("https://raw.githubusercontent.com/fivethirtyeight/covid-19-polls/master/covid_approval_polls_adjusted.csv") %>% as.tibble()
+Trump_polls %>% head()
+
+```
+
+```{r concern polls, echo=FALSE, message=FALSE, warning=FALSE}
+concern_polls = read_csv("https://raw.githubusercontent.com/fivethirtyeight/covid-19-polls/master/covid_concern_polls_adjusted.csv") %>% as.tibble()
+concern_polls %>% head()
+```
+
+#### Data Analysis Strategy
+Here comes the basic sentiment analysis of context with `textdata`. For this project, the lexicon picked is `AFINN` which assigns words with a score that runs between -5 and 5, with negative scores indicating negative sentiment and positive scores indicating positive sentiment.
+
+```{r Function returns plotly graphs to compare article sentiment and number articles by date, warning=FALSE, message=FALSE}
+
+melted_corpus = function(complete_corpus) {
+  sentiment_by_day = complete_corpus %>%
+    select(web_url, content) %>%
+    unnest_tokens(word, content) %>%
+    anti_join(get_stopwords(), by = "word") %>%
+    inner_join(lexicon_afinn(), by = "word") %>%
+    group_by(web_url) %>%
+    summarize(sentiment = sum(value)) %>%
+    left_join(complete_corpus, by = "web_url") %>%
+    select(created_time, sentiment) %>%
+    group_by(date = created_time) %>%
+    summarize(sentiment = mean(sentiment), n = n())
+  
+  return(sentiment_by_day)
+}
+
+```
+
+
+The processed corpus using `Afinn` is the content of the epidemic and Trump. For comparison, the time series of sentiment analysis with the only epidemic is also attached as follows. Since the epidemic related articles might be already classified as negative, the NYTimes attitude toward Trump's dealing with the epidemic could have been a little more positive than the result shows. Besides, the count of daily coverage is to show the extent of NYTimes focusing on the topic for reference.
+
+According to the chart below, the negative attitude of the NYTimes toward Trump dealing with the epidemic is unevenly distributed, however, it is not at all surprising that the reports from the media rarely hold a positive attitude in such an obvious way due to a similar or even more negative position on the word of epidemic only.
+
+
+```{r NYT sentiment on Trump, warning=FALSE, message=FALSE, echo=FALSE}
+
+Trump_sentiment = NYT_Trump %>%
+  mutate(created_time = as.Date(created_time)) %>%
+  melted_corpus() %>% mutate(colour = ifelse(sentiment < 0, "negative", "positive")) %>%
+  ggplot(aes(x = date, y = sentiment)) + geom_bar(stat = "identity", position = "identity", aes(fill = colour)) +
+  scale_fill_manual(values = c(positive = "firebrick1", negative = "steelblue")) +
+  geom_line(aes(x = date, y = n), color = "black") +
+  scale_y_continuous(
+    name = "Sentiment Index",
+    sec.axis = sec_axis(~.*1, name = "Report Frequency"),
+    limits = c(-40,120)
+  ) +
+  facet_wrap(~"NYT Attitude Toward Trump") +
+  theme(panel.grid.major = element_line(color = 'transparent'),
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x=element_blank(),
+        legend.title=element_blank(),
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid.minor=element_blank(),
+        plot.background=element_blank())
+
+Trump_sentiment
+```
+
+```{r include=FALSE, warning=FALSE, message=FALSE, echo=FALSE}
+t1 = read_csv("../Data/NYT news_coronavirus.csv") %>% as.tibble() %>% na.omit()
+t2 = read_csv("../Data/NYT news_Covid19.csv") %>% as.tibble() %>% na.omit()
+t3 = read_csv("../Data/NYT news_epidemic.csv") %>% as.tibble() %>% na.omit()
+t4 = read_csv("../Data/NYT news_pandemic.csv") %>% as.tibble() %>% na.omit()
+
+t1 %>% glimpse()
+t2 %>% glimpse()
+t3 %>% glimpse()
+t4 %>% glimpse()
+
+df = rbind(t1,t2,t3,t4)
+rm(t1,t2,t3,t4)
+drops = c("X1","id")
+df = df[, !(names(df) %in% drops)]
+df = df[!duplicated(df),] %>% na.omit() %>% as.tibble()
+df$created_time = as.Date(df$created_time, "%Y-%m-%d")
+df$web_url = str_replace(df$web_url, "html+", "html")
+df %>% na.omit() %>% glimpse()
+
+
+```
+
+```{r NYT sentiment on epidemic, warning=FALSE, message=FALSE}
+df %>% melted_corpus() %>% 
+  ggplot(aes(x = date, y = sentiment)) +
+  geom_bar(stat = "identity", position = "identity") +
+  ggtitle("NYT on the epidemic")
+```
+
+The graph of Trump's approval rating from February to May presents a searing picture, starting with the first month's figures, in which the support leads the opposition by a large margin, yet such figures don't make sense, given that there was no epidemic in the United States at that time; by the second month, the support lags first and then begins to lead the opposition; and by April, the support keeps slipping and the opposition accounts for almost half the voices.
+
+
+```{r Trump poll plot, warning=FALSE, message=FALSE, echo=FALSE}
+polls_plot = Trump_polls %>%
+  filter(party == "all") %>%
+  mutate(startdate = as.Date(startdate, format = "%m/%d/%y"), enddate = as.Date(enddate, format = "%m/%d/%y")) %>%
+  rowwise() %>% mutate(meandate = as.character(mean.Date(c(startdate, enddate)))) %>%
+  select(meandate, approval = approve_adjusted, disapproval = disapprove_adjusted) %>%
+  group_by(meandate) %>%
+  summarize(mean_approval = mean(approval), mean_disapproval = mean(disapproval)) %>%
+  mutate(meandate = as.Date(meandate)) %>%
+  filter(meandate <= "2020-04-30", meandate >= "2020-02-01") %>%
+  select(date = meandate, approval = mean_approval, disapproval = mean_disapproval) %>%
+  ggplot() + geom_line(aes(date, disapproval, color="Disapproval")) +
+  geom_line(aes(date, approval, color="Approval")) +
+  facet_wrap(~"Trump's Approval Rating")+
+  theme(panel.grid.major = element_line(color = 'transparent'),
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x=element_blank(),
+        legend.title=element_blank(),
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid.minor=element_blank(),
+        plot.background=element_blank())
+
+polls_plot
+#subplot(ggplotly(Trump_sentiment), ggplotly(polls_plot), nrows = 2, margin = 0.04, heights = c(0.6, 0.4), titleX = TRUE, titleY = TRUE)
+
+```
+
+
+On the question of whether the American public is more worried about the infection or the economy, the following polling chart gives a very clear answer. During the most anxious period of late March, which was also the time of the U.S. outbreak, people were far more concerned about the economy than they were about being infected, with 60 percent expressing great concern about the economic situation, while only 40 percent were very nervous about whether they might be infected.
+
+```{r NYT concern over economy, warning=FALSE, message=FALSE, echo=FALSE}
+
+economy_report = NYT_economy %>% mutate(date = as.Date(created_time)) %>%
+  group_by(date) %>% summarize(n = n()) %>%
+  ggplot(aes(date, n)) + geom_bar(stat = "identity", alpha = 0.5) +
+  facet_wrap(~"Report Number on Economy")
+
+economy_report
+```
+
+
+```{r Pollsconcern over economy, warning=FALSE, message=FALSE, echo=FALSE}
+concern_economy = concern_polls %>%
+  filter(subject == "concern-economy") %>%
+  mutate(startdate = as.Date(startdate, format = "%m/%d/%y"), enddate = as.Date(enddate, format = "%m/%d/%y")) %>%
+  rowwise() %>% mutate(meandate = as.character(mean.Date(c(startdate, enddate)))) %>%
+  select(meandate, very = very_adjusted, somewhat = somewhat_adjusted, not_very = not_very_adjusted, not_at_all = not_at_all_adjusted) %>%
+  group_by(meandate) %>%
+  summarize(very = mean(very), somewhat = mean(somewhat), not_very = mean(not_very), not_at_all = mean(not_at_all)) %>%
+  mutate(date = as.Date(meandate)) %>%
+  filter(date <= "2020-04-30", date >= "2020-02-01") %>%
+  gather(degree, Percentage, very: not_at_all) %>%
+  select(date, degree, Percentage) %>%
+  ggplot(aes(date, Percentage, color = degree)) +
+  geom_point() + geom_smooth(method = "loess") +
+  facet_wrap(~"Concern over Economy")+
+  theme(panel.grid.major = element_line(colour = 'transparent'),
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x=element_blank(),
+        legend.title=element_blank(),
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid.minor=element_blank(),
+        plot.background=element_blank())
+
+concern_economy
+#subplot(ggplotly(concern_economy), ggplotly(economy_report), nrows = 2, margin = 0.04, heights = c(0.6, 0.4), titleX = TRUE, titleY = TRUE, which_layout = 1)
+
+```
+
+The New York Times, meanwhile, showed a similar trend in its coverage of either the infection or the economy, which is when media attention to both topics peaked in mid to late April.
+
+```{r NYT concern over infection, warning=FALSE, message=FALSE, echo=FALSE}
+
+infection_report = NYT_infection %>% mutate(date = as.Date(created_time)) %>%
+  group_by(date) %>% summarize(n = n()) %>%
+  ggplot(aes(date, n)) + geom_bar(stat = "identity", alpha = 0.5) +
+  facet_wrap(~"Report Count on Infection")
+
+infection_report
+
+```
+
+```{r Polls concern over infection, warning=FALSE, message=FALSE, echo=FALSE}
+concern_infection = concern_polls %>%
+  filter(subject == "concern-infected") %>%
+  mutate(startdate = as.Date(startdate, format = "%m/%d/%y"), enddate = as.Date(enddate, format = "%m/%d/%y")) %>%
+  rowwise() %>% mutate(meandate = as.character(mean.Date(c(startdate, enddate)))) %>%
+  select(meandate, very = very_adjusted, somewhat = somewhat_adjusted, not_very = not_very_adjusted, not_at_all = not_at_all_adjusted) %>%
+  group_by(meandate) %>%
+  summarize(very = mean(very), somewhat = mean(somewhat), not_very = mean(not_very), not_at_all = mean(not_at_all)) %>%
+  mutate(date = as.Date(meandate)) %>%
+  filter(date <= "2020-04-30", date >= "2020-02-01") %>%
+  gather(degree, Percentage, very: not_at_all) %>%
+  select(date, degree, Percentage) %>%
+  ggplot(aes(date, Percentage, color = degree)) +
+  geom_point() + geom_smooth(method = "loess") +
+  facet_wrap(~"Concern over Infection")+
+  theme(panel.grid.major = element_line(colour = 'transparent'),
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x=element_blank(),
+        legend.title=element_blank(),
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid.minor=element_blank(),
+        plot.background=element_blank())
+
+concern_infection
+#subplot(ggplotly(concern_infection), ggplotly(infection_report), nrows = 2, margin = 0.04, heights = c(0.6, 0.4), titleX = TRUE, titleY = TRUE, which_layout = 1)
+
+
+
+```
+
+Looking at the four graphs above, it is difficult to conclude that the New York Times' topic setting has an impact on the source of public anxiety. However, the negative sentiment about Trump's handling of the epidemic was somewhat linked to the gradual climb of the opposition in April, which was also the month with the most intense media coverage.
+
+#### Conclusion and Future Work
+
+##### Challenge
+
+1. Since the NYT Developer API limits the number of requests per keyword to no more than 2,000, and thus uses multiple prefixes with suffixes to get the raw data. Even so, the processed data have such a flaw of fewer than 3,000 pieces each that cannot be ignored. Despite limiting the sort method to relevance when searching, the articles searched still shows a much higher volume in recent time than before mid-April, which may lead to that it is hard to discern whether the media shape public opinion. Also, since both the NYT reports and the opinion data are time series, it needs more work to process the raw data to find a correlation between the two.
+2. The sentiment analysis of the articles in this study used the `afinn` lexicon and as a result, it appears that most of the articles exhibited negative attitudes and although the epidemic search result itself was singled out for comparison, it was not possible to derive media-specific attitudes and variations in the president's handling of the epidemic in a simple 1+1=2 manner. The first is to compare other lexicon results with the `afinn`'s, and the second is to compare media coverage of the president himself in the same period to see if the media has similar attitudes toward other issues of the president.
+
+##### Improvement
+
+1. On the basis of the polls, it is possible to add data mining on related topics on Twitter, which can directly show public opinion.
+2. In terms of methodology, it is possible to use advanced NLP approaches, including Naive Bayes, N-grams, and Neural Networks, to increase the accuracy of sentiment analysis about the New York Times reports, while having the data from tweets on Twitter to make the relation between the mainstream media and public opinion more clearly drawn.
+
